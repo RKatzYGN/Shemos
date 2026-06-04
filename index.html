@@ -3,19 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Strict Shemos Scanner</title>
+    <title>Advanced Shemos Scanner</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans">
 
     <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-xl">
-        <h1 class="text-2xl font-bold text-center text-gray-800 mb-2">Strict Shemos Detector</h1>
-        <p class="text-sm text-center text-gray-500 mb-6">Scanning for explicit configurations (including standalone or prefixed אלהי).</p>
+        <h1 class="text-2xl font-bold text-center text-gray-800 mb-1">Advanced Shemos Scanner</h1>
+        <p class="text-sm text-center text-gray-500 mb-4">Detects holy names, highlights words, and maps document borders.</p>
 
-        <div class="relative bg-black rounded-lg overflow-hidden aspect-video mb-4 flex items-center justify-center border border-gray-300">
+        <div class="mb-4">
+            <label for="camera-select" class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Select Camera Source:</label>
+            <select id="camera-select" class="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+        </div>
+
+        <div id="video-container" class="relative bg-black rounded-lg overflow-hidden w-full aspect-video mb-4 flex items-center justify-center border border-gray-300 transition-all duration-300">
             <video id="video" autoplay playsinline class="w-full h-full object-cover"></video>
+            
             <canvas id="canvas" class="absolute inset-0 w-full h-full object-cover hidden"></canvas>
+            
             <div id="loader" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white hidden">
                 <div class="animate-spin rounded-full h-12 w-12 border-4 border-t-blue-500 border-gray-300 mb-2"></div>
                 <p id="status-text" class="text-sm font-medium">Initializing...</p>
@@ -44,6 +51,8 @@
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
+        const videoContainer = document.getElementById('video-container');
+        const cameraSelect = document.getElementById('camera-select');
         const scanBtn = document.getElementById('scan-btn');
         const resetBtn = document.getElementById('reset-btn');
         const loader = document.getElementById('loader');
@@ -53,39 +62,89 @@
         const resultDesc = document.getElementById('result-desc');
         const rawTextDisplay = document.getElementById('raw-text');
 
+        let currentStream = null;
         const prefixes = "[בהולמשכ]?";
 
         const strictShemosPatterns = [
-            { 
-                name: "Tetragrammaton (יהוה)", 
-                regex: new RegExp(`^${prefixes}יהוה$`) 
-            },
-            { 
-                name: "Elokim (אלהים)", 
-                regex: new RegExp(`^${prefixes}אלהים$`) 
-            },
-            { 
-                name: "Standalone Double-Yod (יי)", 
-                regex: new RegExp(`^${prefixes}יי$`) 
-            },
-            { 
-                name: "Elokei (אלהי)", 
-                // Updated to allow 0 or 1 prefix letters
-                regex: new RegExp(`^${prefixes}אלהי$`) 
-            }
+            { name: "Tetragrammaton (יהוה)", regex: new RegExp(`^${prefixes}יהוה$`) },
+            { name: "Elokim (אלהים)", regex: new RegExp(`^${prefixes}אלהים$`) },
+            { name: "Standalone Double-Yod (יי)", regex: new RegExp(`^${prefixes}יי$`) },
+            { name: "Elokei (אלהי)", regex: new RegExp(`^${prefixes}אלהי$`) }
         ];
 
-        async function startCamera() {
-            showLoader("Accessing webcam...");
+        // 1. Detect available cameras and populate dropdown menu
+        async function getCameras() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
+                // Must request permissions first or device labels will be blank strings
+                await navigator.mediaDevices.getUserMedia({ video: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                cameraSelect.innerHTML = '';
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${index + 1}`;
+                    cameraSelect.appendChild(option);
                 });
-                video.srcObject = stream;
-                hideLoader();
+
+                // Listen for manual camera selection switch
+                cameraSelect.onchange = () => startCamera(cameraSelect.value);
+                
+                if (videoDevices.length > 0) {
+                    startCamera(videoDevices[0].deviceId);
+                }
             } catch (err) {
-                showLoader("Camera Error: Please allow permissions and refresh.");
-                document.querySelector('.animate-spin').style.display = 'none';
+                showLoader("Camera Access Error. Please grant permissions.");
+            }
+        }
+
+        // 2. Start streaming video feed with chosen configurations
+        async function startCamera(deviceId = null) {
+            showLoader("Starting camera feed...");
+            
+            // Stop any existing streams running to clear memory/hardware locks
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const constraints = {
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            };
+
+            if (deviceId) {
+                constraints.video.deviceId = { exact: deviceId };
+            } else {
+                constraints.video.facingMode = "environment";
+            }
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+                
+                // Track orientation properties when video load dimensions finish resolving
+                video.onloadedmetadata = () => {
+                    adjustOrientationContainer(video.videoWidth, video.videoHeight);
+                    hideLoader();
+                };
+            } catch (err) {
+                showLoader("Failed to access chosen camera source.");
+            }
+        }
+
+        // 3. Dynamically handles Portrait vs. Landscape layout containers
+        function adjustOrientationContainer(width, height) {
+            if (height > width) {
+                // Portrait frame setup
+                videoContainer.classList.remove('aspect-video');
+                videoContainer.classList.add('aspect-[3/4]');
+            } else {
+                // Landscape frame setup
+                videoContainer.classList.remove('aspect-[3/4]');
+                videoContainer.classList.add('aspect-video');
             }
         }
 
@@ -100,8 +159,9 @@
             scanBtn.disabled = false;
         }
 
+        // 4. Capture Canvas Snapshots & Call OCR engine tracking components
         async function scanImage() {
-            showLoader("Capturing frame...");
+            showLoader("Processing frame matrix...");
             
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
@@ -113,7 +173,7 @@
             scanBtn.classList.add('hidden');
             resetBtn.classList.remove('hidden');
             
-            showLoader("Analyzing strict criteria (OCR)...");
+            showLoader("Analyzing document borders & text...");
             
             try {
                 const worker = await Tesseract.createWorker('heb');
@@ -124,11 +184,12 @@
                 processResults(ctx, words, ret.data.text);
             } catch (error) {
                 console.error(error);
-                alert("OCR Processing failed.");
+                alert("OCR Failed.");
                 resetScanner();
             }
         }
 
+        // 5. Build dynamic boundary structures on top of image coordinates
         function processResults(ctx, words, totalText) {
             hideLoader();
             rawTextDisplay.innerText = totalText.replace(/\s+/g, ' ') || "[No text found]";
@@ -136,34 +197,67 @@
             let foundNamesSet = new Set();
             let matchesCount = 0;
 
+            // Page boundary tracking coordinates
+            let minX = canvas.width;
+            let minY = canvas.height;
+            let maxX = 0;
+            let maxY = 0;
+            let validWordsCount = 0;
+
             words.forEach(word => {
                 const cleanWord = word.text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g,"").trim();
+                
+                // Track document/page layout limits based on text footprint zones
+                if (cleanWord.length > 0) {
+                    const box = word.bbox;
+                    if (box.x0 < minX) minX = box.x0;
+                    if (box.y0 < minY) minY = box.y0;
+                    if (box.x1 > maxX) maxX = box.x1;
+                    if (box.y1 > maxY) maxY = box.y1;
+                    validWordsCount++;
+                }
 
                 strictShemosPatterns.forEach(pattern => {
                     if (pattern.regex.test(cleanWord)) {
                         foundNamesSet.add(pattern.name);
                         matchesCount++;
 
+                        // Draw word tracking alerts
                         const box = word.bbox;
-                        ctx.strokeStyle = '#ef4444';
+                        ctx.strokeStyle = '#ef4444'; // Red word block
                         ctx.lineWidth = 4;
                         ctx.strokeRect(box.x0, box.y0, (box.x1 - box.x0), (box.y1 - box.y0));
-
                         ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
                         ctx.fillRect(box.x0, box.y0, (box.x1 - box.x0), (box.y1 - box.y0));
                     }
                 });
             });
 
+            // Draw Document/Page Boundary box if text contents were mapped
+            if (validWordsCount > 0) {
+                ctx.strokeStyle = '#3b82f6'; // Tailwind blue-500
+                ctx.lineWidth = 3;
+                ctx.setLineDash([8, 8]); // Dashed Line mapping effect
+                // Expand padding margins slightly around captured bounds text blocks
+                const padding = 15;
+                ctx.strokeRect(
+                    Math.max(0, minX - padding), 
+                    Math.max(0, minY - padding), 
+                    Math.min(canvas.width, (maxX - minX) + (padding * 2)), 
+                    Math.min(canvas.height, (maxY - minY) + (padding * 2))
+                );
+                ctx.setLineDash([]); // Reset line paths styling configuration
+            }
+
             resultBox.classList.remove('hidden');
             if (matchesCount > 0) {
                 resultBox.className = "mt-6 p-4 rounded-xl border bg-red-50 border-red-200 text-red-900";
                 resultTitle.innerText = `⚠️ Strict Shemos Match Found (${matchesCount})`;
-                resultDesc.innerText = `Detected instances matching your criteria: ${Array.from(foundNamesSet).join(", ")}.`;
+                resultDesc.innerText = `The dashed blue line shows where the page area was read. Red highlights denote: ${Array.from(foundNamesSet).join(", ")}.`;
             } else {
                 resultBox.className = "mt-6 p-4 rounded-xl border bg-green-50 border-green-200 text-green-900";
                 resultTitle.innerText = "✅ Clear";
-                resultDesc.innerText = "No text matched the strict name criteria specified.";
+                resultDesc.innerText = "No targeted names flagged inside the parsed document boundaries (dashed blue box).";
             }
         }
 
@@ -178,7 +272,7 @@
 
         scanBtn.addEventListener('click', scanImage);
         resetBtn.addEventListener('click', resetScanner);
-        window.addEventListener('load', startCamera);
+        window.addEventListener('load', getCameras);
     </script>
 </body>
 </html>
