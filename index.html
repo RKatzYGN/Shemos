@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Advanced Shemos Scanner</title>
+    <!-- Tailwind CSS for styling -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Tesseract.js for OCR -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans">
@@ -13,22 +15,39 @@
         <h1 class="text-2xl font-bold text-center text-gray-800 mb-1">Advanced Shemos Scanner</h1>
         <p class="text-sm text-center text-gray-500 mb-4">Detects holy names, highlights words, and maps document borders.</p>
 
+        <!-- Camera Selection Dropdown -->
         <div class="mb-4">
             <label for="camera-select" class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Select Camera Source:</label>
             <select id="camera-select" class="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
         </div>
 
+        <!-- Paper Orientation Selection -->
+        <div class="mb-4">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Where is the TOP of the paper?</label>
+            <div class="grid grid-cols-4 gap-2">
+                <button type="button" onclick="setOrientation('UP')" id="btn-up" class="orientation-btn py-2 text-xs font-semibold border rounded-xl bg-blue-600 text-white border-blue-600 cursor-pointer text-center">↑ Up</button>
+                <button type="button" onclick="setOrientation('RIGHT')" id="btn-right" class="orientation-btn py-2 text-xs font-semibold border rounded-xl bg-white text-gray-700 border-gray-300 hover:bg-gray-50 cursor-pointer text-center">→ Right</button>
+                <button type="button" onclick="setOrientation('DOWN')" id="btn-down" class="orientation-btn py-2 text-xs font-semibold border rounded-xl bg-white text-gray-700 border-gray-300 hover:bg-gray-50 cursor-pointer text-center">↓ Down</button>
+                <button type="button" onclick="setOrientation('LEFT')" id="btn-left" class="orientation-btn py-2 text-xs font-semibold border rounded-xl bg-white text-gray-700 border-gray-300 hover:bg-gray-50 cursor-pointer text-center">← Left</button>
+            </div>
+        </div>
+
+        <!-- Viewport Container -->
         <div id="video-container" class="relative bg-black rounded-lg overflow-hidden w-full aspect-video mb-4 flex items-center justify-center border border-gray-300 transition-all duration-300">
+            <!-- Live Video Stream -->
             <video id="video" autoplay playsinline class="w-full h-full object-cover"></video>
             
-            <canvas id="canvas" class="absolute inset-0 w-full h-full object-cover hidden"></canvas>
+            <!-- Canvas that holds the snapshot and draws visual layouts -->
+            <canvas id="canvas" class="absolute inset-0 w-full h-full object-contain hidden"></canvas>
             
+            <!-- Loader Overlay -->
             <div id="loader" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white hidden">
                 <div class="animate-spin rounded-full h-12 w-12 border-4 border-t-blue-500 border-gray-300 mb-2"></div>
                 <p id="status-text" class="text-sm font-medium">Initializing...</p>
             </div>
         </div>
 
+        <!-- Action Buttons -->
         <div class="flex gap-2">
             <button id="scan-btn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition duration-200 cursor-pointer text-center shadow-md">
                 Scan Page
@@ -38,6 +57,7 @@
             </button>
         </div>
 
+        <!-- Results Display Section -->
         <div id="result-box" class="mt-6 p-4 rounded-xl border hidden">
             <h3 id="result-title" class="font-bold text-lg mb-1"></h3>
             <p id="result-desc" class="text-sm text-gray-700 mb-3"></p>
@@ -63,6 +83,7 @@
         const rawTextDisplay = document.getElementById('raw-text');
 
         let currentStream = null;
+        let paperOrientation = 'UP'; // Default starting point
         const prefixes = "[בהולמשכ]?";
 
         const strictShemosPatterns = [
@@ -72,10 +93,22 @@
             { name: "Elokei (אלהי)", regex: new RegExp(`^${prefixes}אלהי$`) }
         ];
 
-        // 1. Detect available cameras and populate dropdown menu
+        // Handles UI selection for the paper orientation buttons
+        function setOrientation(direction) {
+            paperOrientation = direction;
+            
+            // Reset all buttons styling
+            document.querySelectorAll('.orientation-btn').forEach(btn => {
+                btn.className = "orientation-btn py-2 text-xs font-semibold border rounded-xl bg-white text-gray-700 border-gray-300 hover:bg-gray-50 cursor-pointer text-center";
+            });
+
+            // Highlight selected button
+            const activeBtn = document.getElementById(`btn-${direction.toLowerCase()}`);
+            activeBtn.className = "orientation-btn py-2 text-xs font-semibold border rounded-xl bg-blue-600 text-white border-blue-600 cursor-pointer text-center";
+        }
+
         async function getCameras() {
             try {
-                // Must request permissions first or device labels will be blank strings
                 await navigator.mediaDevices.getUserMedia({ video: true });
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const videoDevices = devices.filter(device => device.kind === 'videoinput');
@@ -88,7 +121,6 @@
                     cameraSelect.appendChild(option);
                 });
 
-                // Listen for manual camera selection switch
                 cameraSelect.onchange = () => startCamera(cameraSelect.value);
                 
                 if (videoDevices.length > 0) {
@@ -99,52 +131,26 @@
             }
         }
 
-        // 2. Start streaming video feed with chosen configurations
         async function startCamera(deviceId = null) {
             showLoader("Starting camera feed...");
-            
-            // Stop any existing streams running to clear memory/hardware locks
             if (currentStream) {
                 currentStream.getTracks().forEach(track => track.stop());
             }
 
             const constraints = {
-                video: {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                }
+                video: { width: { ideal: 1280 }, height: { ideal: 720 } }
             };
 
             if (deviceId) {
                 constraints.video.deviceId = { exact: deviceId };
-            } else {
-                constraints.video.facingMode = "environment";
             }
 
             try {
                 currentStream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = currentStream;
-                
-                // Track orientation properties when video load dimensions finish resolving
-                video.onloadedmetadata = () => {
-                    adjustOrientationContainer(video.videoWidth, video.videoHeight);
-                    hideLoader();
-                };
+                video.onloadedmetadata = () => hideLoader();
             } catch (err) {
                 showLoader("Failed to access chosen camera source.");
-            }
-        }
-
-        // 3. Dynamically handles Portrait vs. Landscape layout containers
-        function adjustOrientationContainer(width, height) {
-            if (height > width) {
-                // Portrait frame setup
-                videoContainer.classList.remove('aspect-video');
-                videoContainer.classList.add('aspect-[3/4]');
-            } else {
-                // Landscape frame setup
-                videoContainer.classList.remove('aspect-[3/4]');
-                videoContainer.classList.add('aspect-video');
             }
         }
 
@@ -159,21 +165,51 @@
             scanBtn.disabled = false;
         }
 
-        // 4. Capture Canvas Snapshots & Call OCR engine tracking components
         async function scanImage() {
-            showLoader("Processing frame matrix...");
+            showLoader("Processing camera snapshot matrix...");
             
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
             const ctx = canvas.getContext('2d');
-            
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const origW = video.videoWidth;
+            const origH = video.videoHeight;
+
+            // Compute canvas bounds rotation transformation paths
+            if (paperOrientation === 'LEFT' || paperOrientation === 'RIGHT') {
+                canvas.width = origH;
+                canvas.height = origW;
+            } else {
+                canvas.width = origW;
+                canvas.height = origH;
+            }
+
+            // Apply rotation matrices based on user input
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+
+            if (paperOrientation === 'RIGHT') {
+                ctx.translate(canvas.width, 0);
+                ctx.rotate(90 * Math.PI / 180);
+                ctx.drawImage(video, 0, 0, origW, origH);
+            } else if (paperOrientation === 'DOWN') {
+                ctx.translate(canvas.width, canvas.height);
+                ctx.rotate(180 * Math.PI / 180);
+                ctx.drawImage(video, 0, 0, origW, origH);
+            } else if (paperOrientation === 'LEFT') {
+                ctx.translate(0, canvas.height);
+                ctx.rotate(-90 * Math.PI / 180);
+                ctx.drawImage(video, 0, 0, origW, origH);
+            } else {
+                // UP (No adjustments needed)
+                ctx.drawImage(video, 0, 0, origW, origH);
+            }
+            ctx.restore();
+
+            // Swap interface tracking view models
             video.classList.add('hidden');
             canvas.classList.remove('hidden');
             scanBtn.classList.add('hidden');
             resetBtn.classList.remove('hidden');
             
-            showLoader("Analyzing document borders & text...");
+            showLoader("Analyzing rotated document...");
             
             try {
                 const worker = await Tesseract.createWorker('heb');
@@ -189,7 +225,6 @@
             }
         }
 
-        // 5. Build dynamic boundary structures on top of image coordinates
         function processResults(ctx, words, totalText) {
             hideLoader();
             rawTextDisplay.innerText = totalText.replace(/\s+/g, ' ') || "[No text found]";
@@ -197,7 +232,6 @@
             let foundNamesSet = new Set();
             let matchesCount = 0;
 
-            // Page boundary tracking coordinates
             let minX = canvas.width;
             let minY = canvas.height;
             let maxX = 0;
@@ -207,7 +241,6 @@
             words.forEach(word => {
                 const cleanWord = word.text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?"']/g,"").trim();
                 
-                // Track document/page layout limits based on text footprint zones
                 if (cleanWord.length > 0) {
                     const box = word.bbox;
                     if (box.x0 < minX) minX = box.x0;
@@ -222,9 +255,8 @@
                         foundNamesSet.add(pattern.name);
                         matchesCount++;
 
-                        // Draw word tracking alerts
                         const box = word.bbox;
-                        ctx.strokeStyle = '#ef4444'; // Red word block
+                        ctx.strokeStyle = '#ef4444';
                         ctx.lineWidth = 4;
                         ctx.strokeRect(box.x0, box.y0, (box.x1 - box.x0), (box.y1 - box.y0));
                         ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
@@ -233,12 +265,10 @@
                 });
             });
 
-            // Draw Document/Page Boundary box if text contents were mapped
             if (validWordsCount > 0) {
-                ctx.strokeStyle = '#3b82f6'; // Tailwind blue-500
+                ctx.strokeStyle = '#3b82f6';
                 ctx.lineWidth = 3;
-                ctx.setLineDash([8, 8]); // Dashed Line mapping effect
-                // Expand padding margins slightly around captured bounds text blocks
+                ctx.setLineDash([8, 8]);
                 const padding = 15;
                 ctx.strokeRect(
                     Math.max(0, minX - padding), 
@@ -246,18 +276,18 @@
                     Math.min(canvas.width, (maxX - minX) + (padding * 2)), 
                     Math.min(canvas.height, (maxY - minY) + (padding * 2))
                 );
-                ctx.setLineDash([]); // Reset line paths styling configuration
+                ctx.setLineDash([]);
             }
 
             resultBox.classList.remove('hidden');
             if (matchesCount > 0) {
                 resultBox.className = "mt-6 p-4 rounded-xl border bg-red-50 border-red-200 text-red-900";
                 resultTitle.innerText = `⚠️ Strict Shemos Match Found (${matchesCount})`;
-                resultDesc.innerText = `The dashed blue line shows where the page area was read. Red highlights denote: ${Array.from(foundNamesSet).join(", ")}.`;
+                resultDesc.innerText = `Oriented based on selection. Red blocks show matches, dashed blue shows mapped reading zone.`;
             } else {
                 resultBox.className = "mt-6 p-4 rounded-xl border bg-green-50 border-green-200 text-green-900";
                 resultTitle.innerText = "✅ Clear";
-                resultDesc.innerText = "No targeted names flagged inside the parsed document boundaries (dashed blue box).";
+                resultDesc.innerText = "No targeted names flagged inside the parsed document boundaries.";
             }
         }
 
